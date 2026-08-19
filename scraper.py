@@ -1,5 +1,6 @@
 import os
 import requests
+from bs4 import BeautifulSoup
 from feedgenerator import Rss201rev2Feed
 
 feed = Rss201rev2Feed(
@@ -9,27 +10,32 @@ feed = Rss201rev2Feed(
     language="zh-Hant"
 )
 
-# 使用公用高可用源或直連 API
-primary_api_url = "https://rsshub.app/stheadline/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9"
-backup_api_url = "https://www.stheadline.com/api/getColumns?columnistId=李純恩" # 備用
+# 使用公用解析源或爬取頁面
+gateway_url = "https://rsshub.app/stheadline/columnist/李純恩"
 
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Accept": "application/xml, application/json; q=0.9, */*; q=0.8",
+    "Accept": "application/xml, text/plain, */*"
 }
 
-def fetch_rss():
-    print(f"嘗試抓取 API 源...")
-    try:
-        # 先嘗試公用高可用解析源
-        response = requests.get(primary_api_url, headers=headers, timeout=25)
-        if response.status_code == 200:
-            print("公用源抓取成功！")
-            return response.content
-    except Exception as e:
-        print(f"公用源抓取失敗: {e}")
+print(f"嘗試抓取標準內容...")
+try:
+    # 優先嘗試從高可用源獲取標準內容
+    response = requests.get(gateway_url, headers=headers, timeout=25)
+    if response.status_code == 200:
+        os.makedirs("public", exist_ok=True)
+        with open("public/feed.xml", "wb") as f:
+            f.write(response.content)
+        print("Successfully generated from source!")
+        exit(0)
+except Exception as e:
+    print(f"Gateway fetch failed: {e}")
 
-    # 若公用源失敗，嘗試寫入一個基本的 XML 結構（或你原本邏輯的简化版）
-    print(f"抓取失敗，生成空白 RSS...")
-    # 這裡可以選擇回傳空白、舊內容或使用 backup_api_url (邏輯較複雜，此處簡化)
-    return b'<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>\xe6\x9d\x8e\xe7\xb4\x94\xe6\x81\xa9 - \xe5\xa5
+# 若 Gateway 失敗則使用備用直連 API 邏輯
+# 由於直連失敗率極高，這裡改為產生一個提示性 RSS
+print(f"解析失敗，生成空白 RSS...")
+os.makedirs("public", exist_ok=True)
+with open("public/feed.xml", "w", encoding="utf-8") as f:
+    f.write('<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>\xe6\x9d\x8e\xe7\xb4\x94\xe6\x81\xa9 - \xe5\xa5\xbd\xe5\xa5\xbd\xe9\x81\x8e\xe6\x97\xa5\xe5\xad\x90 (\xe5\x85\x88\xe6\x96\x87\xe7\x89\x88)</title><link>https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9</link><description>\xe6Hub \xe7\xbd\x91\xe5\xe9\x9a\x9c\xef\xbc\x8c\xe8\xaf\xbd\xe7\xa8\x8d\xe5\x90\x8e\xe5\x86\x8d\xe8\xaf\x95\xe3\x80\x82</description><item><title>\xe6\x9c\xe6\x9d\xe8\xe5\xe5\xe8\x81\x94\xe7\xbd\xe6\x9c\xe5\xe5\xe7\xe6\xe6</item></channel></rss>')
+
+print("Fallback generated!")
