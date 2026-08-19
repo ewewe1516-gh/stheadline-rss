@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from bs4 import BeautifulSoup
 from feedgenerator import Rss201rev2Feed
@@ -10,58 +11,42 @@ feed = Rss201rev2Feed(
     language="zh-Hant"
 )
 
-# 透過第三方 CORS/Proxy 網關繞過 Cloudflare IP 封鎖
-urls_to_try = [
-    "https://api.allorigins.win/raw?url=https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9",
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://www.stheadline.com/"
+}
+
+# 使用備用解析網關獲取星島專欄資料
+api_endpoints = [
+    "https://rsshub.rss3.io/stheadline/columnist/李純恩",
     "https://rsshub.app/stheadline/columnist/李純恩"
 ]
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-}
+success = False
 
-fetched = False
-
-for target in urls_to_try:
+for endpoint in api_endpoints:
     try:
-        # 設定 8 秒嚴格 Timeout，絕不卡死
-        res = requests.get(target, headers=headers, timeout=8)
-        if res.status_code == 200:
-            if "rss" in target or "<rss" in res.text:
-                os.makedirs("public", exist_ok=True)
-                with open("public/feed.xml", "wb") as f:
-                    f.write(res.content)
-                fetched = True
-                print("Successfully fetched via Proxy/Gateway!")
-                break
-            else:
-                soup = BeautifulSoup(res.text, "html.parser")
-                links = []
-                for a in soup.find_all("a", href=True):
-                    href = a["href"]
-                    if "/article/" in href and len(a.get_text(strip=True)) > 2:
-                        full_url = "https://www.stheadline.com" + href if href.startswith("/") else href
-                        if full_url not in [l[1] for l in links]:
-                            links.append((a.get_text(strip=True), full_url))
-                
-                if links:
-                    for title, link in links[:5]:
-                        feed.add_item(title=title, link=link, description=f"<p>點擊閱讀全文：<a href='{link}'>{title}</a></p>")
-                    fetched = True
-                    break
+        res = requests.get(endpoint, headers=headers, timeout=12)
+        if res.status_code == 200 and len(res.content) > 200:
+            os.makedirs("public", exist_ok=True)
+            with open("public/feed.xml", "wb") as f:
+                f.write(res.content)
+            print("Successfully updated RSS from fallback gateway!")
+            success = True
+            break
     except Exception as e:
-        print(f"Failed attempt for {target}: {e}")
+        print(f"Endpoint {endpoint} failed: {e}")
 
-# 若全數失敗，生成標準結構確保不輸出空 XML
-if not fetched:
+if not success:
+    # 若被嚴格攔截，維持輸出引導連結項目
     feed.add_item(
-        title="專欄更新提醒",
+        title="[星島專欄] 李純恩 - 好好過日子 最新文章",
         link="https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9",
-        description="星島日報目前啟用了高強度防爬機制，請點擊連結前往官網閱讀最新文章。"
+        description="由於星島網頁防護機制更新，請點擊連結前往官網閱讀最新專欄文章。"
     )
+    os.makedirs("public", exist_ok=True)
+    with open("public/feed.xml", "w", encoding="utf-8") as f:
+        feed.write(f, "utf-8")
 
-os.makedirs("public", exist_ok=True)
-with open("public/feed.xml", "w", encoding="utf-8") as f:
-    feed.write(f, "utf-8")
-
-print("Scraper completed successfully.")
+print("Finished!")
