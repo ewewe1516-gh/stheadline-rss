@@ -10,31 +10,35 @@ feed = Rss201rev2Feed(
     language="zh-Hant"
 )
 
-# 使用公用解析源或爬取頁面
-gateway_url = "https://rsshub.app/stheadline/columnist/李純恩"
-
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Accept": "application/xml, text/plain, */*"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 }
 
-print(f"嘗試抓取標準內容...")
-try:
-    # 優先嘗試從高可用源獲取標準內容
-    response = requests.get(gateway_url, headers=headers, timeout=25)
-    if response.status_code == 200:
-        os.makedirs("public", exist_ok=True)
-        with open("public/feed.xml", "wb") as f:
-            f.write(response.content)
-        print("Successfully generated from source!")
-        exit(0)
-except Exception as e:
-    print(f"Gateway fetch failed: {e}")
+# 抓取星島專欄 API，直接避開前端動態渲染
+api_url = "https://www.stheadline.com/api/getColumns?columnistId=%E6%9D%8E%E7%B4%94%E6%81%A9"
 
-# 若 Gateway 失敗則生成提示性 RSS，確保程式能結束
-print(f"解析失敗，生成空白 RSS...")
+try:
+    res = requests.get(api_url, headers=headers, timeout=10)
+    if res.status_code == 200 and "data" in res.json():
+        articles = res.json()["data"][:5]
+        for art in articles:
+            title = art.get("title", "好好過日子")
+            article_id = art.get("id")
+            link = f"https://www.stheadline.com/columnist/article/{article_id}"
+            
+            # 抓取內文
+            art_res = requests.get(link, headers=headers, timeout=8)
+            art_soup = BeautifulSoup(art_res.text, "html.parser")
+            content_div = art_soup.select_one(".paragraph, .article-content")
+            
+            body = str(content_div) if content_div else f"<p>請前往原文閱讀：<a href='{link}'>{title}</a></p>"
+            feed.add_item(title=title, link=link, description=body)
+except Exception as e:
+    print(f"API Fetch Error: {e}")
+
+# 確保輸出目錄與檔案存在
 os.makedirs("public", exist_ok=True)
 with open("public/feed.xml", "w", encoding="utf-8") as f:
-    f.write('<?xml version="1.0" encoding="utf-8"?><rss version="2.0"><channel><title>\xe6\x9d\x8e\xe7\xb4\x94\xe6\x81\xa9 - \xe5\xa5\xbd\xe5\xa5\xbd\xe9\x81\x8e\xe6\x97\xa5\xe5\xad\x90 (\xe5\x85\x88\xe6\x96\x87\xe7\x89\x88)</title><link>https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9</link><description>Hub \xe7\xbd\x91\xe5\xe9\x9a\x9c\xef\xbc\x8c\xe8\xaf\xbd\xe7\xa8\x8d\xe5\x90\x8e\xe5\x86\x8d\xe8\xaf\x95\xe3\x80\x82</description><item><title>\xe6\x9c\xe6\x9d\xe8\xe5\xe5\xe8\x81\x94\xe7\xbd\xe6\x9c\xe5\xe5\xe7\xe6\xe6</item></channel></rss>')
+    feed.write(f, "utf-8")
 
-print("Fallback generated!")
+print("Done!")
