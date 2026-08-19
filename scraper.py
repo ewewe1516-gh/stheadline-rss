@@ -1,8 +1,6 @@
 import os
-import re
-from bs4 import BeautifulSoup
+import requests
 from feedgenerator import Rss201rev2Feed
-from playwright.sync_api import sync_playwright
 
 feed = Rss201rev2Feed(
     title="李純恩 - 好好過日子 (全文版)",
@@ -11,55 +9,50 @@ feed = Rss201rev2Feed(
     language="zh-Hant"
 )
 
-articles = []
+# 直接請求星島頭條專欄文章 API
+api_url = "https://www.stheadline.com/api/getColumns"
+params = {
+    "columnistId": "李純恩",
+    "page": 1,
+    "limit": 10
+}
 
-def run_browser():
-    global articles
-    with sync_playwright() as p:
-        # 啟動無頭 Chromium 瀏覽器
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800}
-        )
-        page = context.new_page()
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "Referer": "https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9",
+    "Accept": "application/json, text/plain, */*"
+}
+
+try:
+    res = requests.get(api_url, params=params, headers=headers, timeout=15)
+    if res.status_code == 200:
+        data = res.json()
+        # 兼容 API 的多種資料層級結構
+        articles = data.get("data", []) if isinstance(data.get("data"), list) else data.get("data", {}).get("list", [])
         
-        target_url = "https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9"
-        print(f"Navigating to {target_url}...")
-        
-        try:
-            page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(5000)  # 等待 5 秒讓 JavaScript 渲染列表
+        for art in articles:
+            title = art.get("title") or art.get("headline") or "好好過日子"
+            art_id = art.get("id") or art.get("article_id")
             
-            # 獲取完整渲染後的 HTML
-            html_content = page.content()
-            soup = BeautifulSoup(html_content, "html.parser")
+            if art_id:
+                link = f"https://www.stheadline.com/columnist/article/{art_id}"
+            else:
+                link = feed.feed["link"]
+                
+            summary = art.get("summary") or art.get("description") or art.get("content") or f"<p>點擊查看全文：<a href='{link}'>{title}</a></p>"
             
-            # 解析專欄文章連結
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                title = a.get_text(strip=True)
-                if "/article/" in href and len(title) > 2:
-                    full_link = href if href.startswith("http") else f"https://www.stheadline.com{href}"
-                    if not any(item["link"] == full_link for item in articles):
-                        articles.append({"title": title, "link": full_link})
-        except Exception as e:
-            print(f"Playwright error: {e}")
-        finally:
-            browser.close()
-
-run_browser()
-
-# 將抓取到的文章寫入 RSS
-for art in articles[:10]:
-    feed.add_item(
-        title=art["title"],
-        link=art["link"],
-        description=f"<p>點擊查看星島專欄全文：<a href='{art['link']}'>{art['title']}</a></p>"
-    )
+            feed.add_item(
+                title=title,
+                link=link,
+                description=summary
+            )
+            
+        print(f"Successfully added {len(articles)} articles!")
+    else:
+        print(f"API Error: {res.status_code}")
+except Exception as e:
+    print(f"Fetch failed: {e}")
 
 os.makedirs("public", exist_ok=True)
 with open("public/feed.xml", "w", encoding="utf-8") as f:
     feed.write(f, "utf-8")
-
-print(f"Done! Successfully generated RSS with {len(articles)} articles.")
