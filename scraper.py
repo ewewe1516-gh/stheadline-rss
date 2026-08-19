@@ -1,4 +1,5 @@
 import os
+import re
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from feedgenerator import Rss201rev2Feed
@@ -20,34 +21,38 @@ with sync_playwright() as p:
     )
     page = context.new_page()
 
-    # Use domcontentloaded instead of networkidle to avoid hanging on ads
-    page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
-    page.wait_for_timeout(3000) # Wait 3 seconds for DOM rendering
+    # 開啟專欄頁面並等待加載
+    page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+    page.wait_for_timeout(4000)
     
     soup = BeautifulSoup(page.content(), "html.parser")
 
+    # 寬鬆匹配所有包含文章連結的 a 標籤
     articles = []
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        title = a.text.strip()
-        if "/opinion/" in href and len(title) > 4:
-            full_url = urljoin(target_url, href)
+        title = a.get_text(strip=True)
+        # 匹配星島文章 URL 特徵 (/columnist/article/ 或 /article/)
+        if re.search(r'/(article|columnist|opinion)/', href) and len(title) > 2:
+            full_url = urljoin("https://www.stheadline.com", href)
             if not any(item["link"] == full_url for item in articles):
                 articles.append({"title": title, "link": full_url})
 
+    # 抓取最新 5 篇內文
     for art in articles[:5]:
         try:
             page.goto(art["link"], wait_until="domcontentloaded", timeout=15000)
             page.wait_for_timeout(2000)
             art_soup = BeautifulSoup(page.content(), "html.parser")
 
-            content_div = art_soup.select_one(".article-content, .news-detail-content, .content")
+            # 擴充內文容器選擇器
+            content_div = art_soup.select_one(".article-content, .news-detail-content, .content, .paragraph, #article-content")
             if content_div:
-                for s in content_div.select("script, style, .ad, .banner"):
+                for s in content_div.select("script, style, .ad, .banner, .share-btn"):
                     s.decompose()
                 full_content = str(content_div)
             else:
-                full_content = "<p>內文解析失敗，請點擊連結查看原文。</p>"
+                full_content = f"<p>請點擊連結查看全文：<a href='{art['link']}'>{art['title']}</a></p>"
 
             feed.add_item(
                 title=f"[好好過日子] {art['title']}",
@@ -63,4 +68,4 @@ os.makedirs("public", exist_ok=True)
 with open("public/feed.xml", "w", encoding="utf-8") as f:
     feed.write(f, "utf-8")
 
-print("Finished!")
+print("Done!")
