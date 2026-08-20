@@ -1,8 +1,6 @@
 import os
 import json
-import re
-import requests
-from bs4 import BeautifulSoup
+import subprocess
 from feedgenerator import Rss201rev2Feed
 
 feed = Rss201rev2Feed(
@@ -12,46 +10,55 @@ feed = Rss201rev2Feed(
     language="zh-Hant"
 )
 
-url = "https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9"
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-}
+# 使用 curl 繞過基本的 Python requests 封鎖
+curl_cmd = [
+    "curl", "-s", "-L",
+    "https://www.stheadline.com/columnist/%E6%9D%8E%E7%B4%94%E6%81%A9",
+    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+    "-H", "Accept-Language: zh-TW,zh;q=0.9,en;q=0.8"
+]
 
 articles = []
 
 try:
-    res = requests.get(url, headers=headers, timeout=15)
-    if res.status_code == 200:
-        soup = BeautifulSoup(res.text, "html.parser")
+    html_content = subprocess.check_output(curl_cmd, text=True, timeout=20)
+    
+    # 嘗試從 NEXT_DATA JSON 提取文章清單
+    if "__NEXT_DATA__" in html_content:
+        json_str = html_content.split('<script id="__NEXT_DATA__" type="application/json">')[1].split('</script>')[0]
+        data = json.loads(json_str)
         
-        # 1. 嘗試從頁面內建的 JSON-LD / __NEXT_DATA__ / 腳本區塊中提取數據
-        scripts = soup.find_all("script")
-        for script in scripts:
-            content = script.string or ""
-            if "article" in content.lower() or "columnist" in content.lower():
-                # 尋找 JSON 格式的文章 ID 與標題組合
-                matches = re.findall(r'"id"\s*:\s*(\d+).*?"title"\s*:\s*"([^"]+)"', content)
-                for art_id, title in matches:
-                    link = f"https://www.stheadline.com/columnist/article/{art_id}"
-                    if not any(a["link"] == link for a in articles):
-                        articles.append({"title": title, "link": link})
+        # 遞迴尋找含有 articleId 或 id 與 title 的數據結構
+        page_props = data.get("props", {}).get("pageProps", {})
+        
+        # 尋找頁面中的專欄文章清單
+        items = page_props.get("initialData", {}).get("data", []) or page_props.get("articles", [])
+        
+        for item in items:
+            art_id = item.get("id") or item.get("articleId")
+            title = item.get("title")
+            if art_id and title:
+                articles.append({
+                    "title": title,
+                    "link": f"https://www.stheadline.com/columnist/article/{art_id}"
+                })
 
-        # 2. 備用方案：若腳本沒擷取到，直接解析所有 HTML <a> 標籤
-        if not articles:
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                title = a.get_text(strip=True)
-                if "/article/" in href and len(title) > 2:
-                    full_link = href if href.startswith("http") else f"https://www.stheadline.com{href}"
-                    if not any(item["link"] == full_link for item in articles):
-                        articles.append({"title": title, "link": full_link})
+    # 若 JSON 未能提取，使用正規表示式直接掃描文章連結結構
+    if not articles:
+        import re
+        matches = re.findall(r'href=["\'](/columnist/article/(\d+))["\'][^>]*>(.*?)</a>', html_content)
+        for path, art_id, raw_title in matches:
+            title = re.sub(r'<[^>]+>', '', raw_title).strip()
+            link = f"https://www.stheadline.com{path}"
+            if title and not any(a["link"] == link for a in articles):
+                articles.append({"title": title, "link": link})
 
-        print(f"Extracted {len(articles)} articles!")
+    print(f"Successfully extracted {len(articles)} articles!")
+
 except Exception as e:
     print(f"Fetch failed: {e}")
 
-# 寫入 RSS
+# 寫入 RSS Item
 for art in articles[:15]:
     feed.add_item(
         title=art["title"],
@@ -63,4 +70,4 @@ os.makedirs("public", exist_ok=True)
 with open("public/feed.xml", "w", encoding="utf-8") as f:
     feed.write(f, "utf-8")
 
-print("RSS generation process finished.")
+print("Finished generating public/feed.xml")
